@@ -205,9 +205,13 @@ impl WsSession {
                             if let Ok(json_text) = String::from_utf8(data.to_vec()){
                                 if let Ok(Some(nonce_ivec)) = self.nonce_idx.get(data_key2){
                                     let offset = vectu64(nonce_ivec.to_vec());
-                                    self.offset = offset + 1;
+                                    if offset > self.offset{
+                                        self.offset = offset + 1;
+                                    }
                                 }
-                                ctx.text(json_text);
+                                ctx.run_later(Duration::from_millis(80), |_act, ctx|{
+                                    ctx.text(json_text);
+                                });
                             }
                         }
                     }
