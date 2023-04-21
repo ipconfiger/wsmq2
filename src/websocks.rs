@@ -209,8 +209,9 @@ impl WsSession {
                                         self.offset = offset + 1;
                                     }
                                 }
-                                ctx.run_later(Duration::from_millis(80), |_act, ctx|{
+                                ctx.run_later(Duration::from_millis(100), |_act, ctx|{
                                     ctx.text(json_text);
+                                    println!("topic {} responsed", _act.client_id)
                                 });
                             }
                         }
