@@ -4,12 +4,23 @@ use actix_web_actors::ws;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use std::time::{SystemTime, UNIX_EPOCH};
 use chrono::NaiveDate;
 use chrono::prelude::*;
 use sled::IVec;
 
 #[derive(Debug, PartialEq)]
 struct TransactionError;
+
+fn got_timestamp() -> u128 {
+    let now = SystemTime::now();
+    let timestamp = now.duration_since(UNIX_EPOCH).expect("Time went backwards").as_millis();
+    timestamp
+}
+
+fn diff_timestamp(last: u128) -> u128 {
+    got_timestamp() - last
+}
 
 pub fn today_ts() -> i64{
     let today = NaiveDate::from_ymd_opt(
@@ -161,7 +172,7 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for WsSession {
             Ok(ws::Message::Text(text)) => {
                 match serde_json::from_str::<Message>(&text){
                     Ok(msg)=>{
-                        println!("Got Event to:{:?}", msg);
+                        // println!("Got Event to:{:?}", msg);
                         let mut msg = msg;
                         self.process_message(&mut msg);
                     }
@@ -183,6 +194,7 @@ impl WsSession {
         // execute every 200ms
         if let Some(topics) = &self.topics{
             // if subscribe some topics
+            let start_ts = got_timestamp();
             for topic in topics{
                 let fetch_flag_min = make_key(topic.as_str(), self.offset);
                 let fetch_flag_max = make_key(topic.as_str(), u64::MAX);
@@ -197,11 +209,15 @@ impl WsSession {
                                 }
                                 let debug_msg = json_text.clone();
                                 ctx.text(json_text);
-                                println!("Message {} dispached to {}", debug_msg, topic)
+                                //println!("Message dispached to {}", topic)
                             }
                         }
                     }
                 }
+            }
+            let diff_ts = diff_timestamp(start_ts);
+            if diff_ts >= 199 {
+                println!("slow {diff_ts} ms")
             }
         }
     }
@@ -238,17 +254,17 @@ impl WsSession {
         // update today's last nonce index
         let new_idx_key = idx_key.clone();
         if let Ok(_k) = self.day_idx.insert(today_timestamp_vec, idx_key){
-            println!("update today's last nonce success!");
+            //println!("update today's last nonce success!");
             if let Ok(_) = self.range_idx.insert(new_idx_key, key.as_bytes()){
-                println!("update range index success!");
+                //println!("update range index success!");
                 let main_key = make_key(message_topic.as_str(), nonce);
                 if let Ok(_) = self.main_idx.insert(main_key, key.as_bytes()) {
-                    println!("update main index success!");
+                    //println!("update main index success!");
                     let key2 = key.clone();
                     if let Ok(_) = self.db.insert(key, val.into_bytes()){
-                        println!("insert data success!");
+                        //println!("insert data success!");
                         if let Ok(_) = self.nonce_idx.insert(key2, IVec::from(nonce.to_be_bytes().to_vec())){
-                            println!("insert nonce idx success!");
+                            //println!("insert nonce idx success!");
                         }else{
                             println!("insert nonce idx faild!");
                         }

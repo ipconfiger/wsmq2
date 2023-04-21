@@ -85,10 +85,14 @@ async fn trim_handler(req: HttpRequest, data: web::Data<AppState>) -> impl Respo
                 let topic = str_key.split('-').next().unwrap();
                 let nonce = websocks::vectu64(rkey.to_vec());
                 let main_key = websocks::make_key(topic, nonce);
+                let main_key2 = main_key.clone();
                 if let Ok(_) = data.main_idx.remove(main_key){
                     println!("removed from index");
                 }
                 if let Ok(_) = data.range_idx.remove(rkey){
+                    println!("removed from index");
+                }
+                if let Ok(_) = data.nonce_idx.remove(main_key2){
                     println!("removed from index");
                 }
             }
