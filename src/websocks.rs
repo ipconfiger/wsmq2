@@ -207,9 +207,7 @@ impl WsSession {
                                     let offset = vectu64(nonce_ivec.to_vec());
                                     self.offset = offset + 1;
                                 }
-                                let debug_msg = json_text.clone();
                                 ctx.text(json_text);
-                                //println!("Message dispached to {}", topic)
                             }
                         }
                     }
