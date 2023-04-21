@@ -212,7 +212,7 @@ impl WsSession {
                                         self.offset = offset + 1;
                                     }
                                 }
-                                ctx.run_later(Duration::from_millis(100), |_act, ctx|{
+                                ctx.run_later(Duration::from_millis(5), |_act, ctx|{
                                     ctx.text(json_text);
                                 });
                             }else{
@@ -230,7 +230,7 @@ impl WsSession {
             if diff_ts >= 199 {
                 eprintln!("slow {diff_ts} ms")
             }
-            ctx.run_later(Duration::from_millis(200), |act, ctx|{
+            ctx.run_later(Duration::from_millis(100), |act, ctx|{
                 act.every_200_ms(ctx);
             });
         }
