@@ -112,12 +112,16 @@ async fn main() -> std::io::Result<()> {
     }else{
         8080
     };
-    let db = sled::open("db.sled").unwrap();
-    let r_idx = db.open_tree("range").unwrap();
-    let d_idx = db.open_tree("d_idx").unwrap();
-    let m_idx = db.open_tree("main_idx").unwrap();
-    let nonce_idx = db.open_tree("uid_to_nonce_idx").unwrap();
 
+    let db = sled::open("data/db.sled").unwrap();
+    let r_idx_db = sled::open("data/r_idx.sled").unwrap();
+    let r_idx = r_idx_db.open_tree("range").unwrap();
+    let d_idx_db = sled::open("data/d_idx.sled").unwrap();
+    let d_idx = d_idx_db.open_tree("d_idx").unwrap();
+    let m_idx_db = sled::open("data/m_idx.sled").unwrap();
+    let m_idx = m_idx_db.open_tree("main_idx").unwrap();
+    let nonce_idx_db = sled::open("data/nonce_idx.sled").unwrap();
+    let nonce_idx = nonce_idx_db.open_tree("uid_to_nonce_idx").unwrap();
     if let Ok(Some((k, _v))) = r_idx.last(){
         let last_id = u64::from_be_bytes(k.to_vec().try_into().unwrap());
         println!("last id:{}", last_id);
