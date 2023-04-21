@@ -1,5 +1,5 @@
 use std::env;
-use actix_web::{web, App, Error, HttpRequest, HttpResponse, HttpServer, Responder};
+use actix_web::{web, get, App, Error, HttpRequest, HttpResponse, HttpServer, Responder};
 use actix_web_actors::ws;
 use serde::Serialize;
 mod websocks;
@@ -18,23 +18,6 @@ struct AppState {
     nonce_idx: sled::Tree
 }
 
-async fn index(req: HttpRequest, stream: web::Payload, data: web::Data<AppState>) -> Result<HttpResponse, Error> {
-    let client_id: &str = req.match_info().get("cid").unwrap();
-    let db = data.db.clone();
-    let resp = ws::start(websocks::WsSession {
-        topics:Some(vec![]),
-        db,
-        client_id: client_id.to_string(),
-        offset: 0,
-        range_idx: data.range_idx.clone(),
-        day_idx: data.day_idx.clone(),
-        main_idx: data.main_idx.clone(),
-        nonce_idx: data.nonce_idx.clone(),
-        id_generator: ID_GENERATOR.clone()
-    }, &req, stream);
-    println!("{:?}", resp);
-    resp
-}
 
 #[derive(Serialize)] 
 struct Status {
@@ -103,6 +86,32 @@ async fn trim_handler(req: HttpRequest, data: web::Data<AppState>) -> impl Respo
     HttpResponse::Ok().body(json)
 }
 
+const MAX_FRAME_SIZE: usize = 128_384; // 16KiB
+
+#[get("/ws/{cid}")]
+async fn websocket_service(req: HttpRequest, stream: web::Payload, data: web::Data<AppState>) -> Result<HttpResponse, Error> {
+    // Create a Websocket session with a specific max frame size, codec, and protocols.
+    let client_id: &str = req.match_info().get("cid").unwrap();
+    let db = data.db.clone();
+    let actor = websocks::WsSession {
+        topics:Some(vec![]),
+        db,
+        client_id: client_id.to_string(),
+        offset: 0,
+        range_idx: data.range_idx.clone(),
+        day_idx: data.day_idx.clone(),
+        main_idx: data.main_idx.clone(),
+        nonce_idx: data.nonce_idx.clone(),
+        id_generator: ID_GENERATOR.clone()
+    };
+    ws::WsResponseBuilder::new(actor, &req, stream)
+        .codec(actix_http::ws::Codec::new())
+        .frame_size(MAX_FRAME_SIZE)
+        .protocols(&["A", "B"])
+        .start()
+}
+
+
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     let args: Vec<String> = env::args().collect();
@@ -129,7 +138,7 @@ async fn main() -> std::io::Result<()> {
     }
     let app_state = web::Data::new(AppState { db, range_idx: r_idx, day_idx: d_idx, main_idx: m_idx, nonce_idx});
     HttpServer::new(move || App::new()
-                            .route("/ws/{cid}", web::get().to(index))
+                            .service(websocket_service)
                             .route("/api/status", web::get().to(status_handler))
                             .route("/api/trim/{offset}/days", web::get().to(trim_handler))
                             .app_data(app_state.clone()))

@@ -151,7 +151,7 @@ impl Actor for WsSession {
     type Context = ws::WebsocketContext<Self>;
     fn started(&mut self, ctx: &mut Self::Context) {
         ctx.text("{\"rs\":true,\"detail\":\"connected\"}");
-        ctx.run_interval(Duration::from_millis(200), |act, ctx|{
+        ctx.run_later(Duration::from_millis(200), |act, ctx|{
             act.every_200_ms(ctx);
         });
        
@@ -172,7 +172,7 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for WsSession {
             Ok(ws::Message::Text(text)) => {
                 match serde_json::from_str::<Message>(&text){
                     Ok(msg)=>{
-                        // println!("Got Event to:{:?}", msg);
+                        //println!("Got Event to:{:?}", msg.topic);
                         let mut msg = msg;
                         self.process_message(&mut msg);
                     }
@@ -195,9 +195,12 @@ impl WsSession {
         if let Some(topics) = &self.topics{
             // if subscribe some topics
             let start_ts = got_timestamp();
+            let get_offset = self.offset;
+            //println!("process:{} start with offset {}", self.client_id, get_offset);
             for topic in topics{
-                let fetch_flag_min = make_key(topic.as_str(), self.offset);
+                let fetch_flag_min = make_key(topic.as_str(), get_offset);
                 let fetch_flag_max = make_key(topic.as_str(), u64::MAX);
+                //println!("process topic:{}", topic);
                 for item in self.main_idx.range(fetch_flag_min..fetch_flag_max) {
                     if let Ok((_k, data_key)) = item{
                         let data_key2 = data_key.clone();
@@ -211,17 +214,25 @@ impl WsSession {
                                 }
                                 ctx.run_later(Duration::from_millis(100), |_act, ctx|{
                                     ctx.text(json_text);
-                                    println!("topic {} responsed", _act.client_id)
                                 });
+                            }else{
+                                println!("invalid json");
                             }
+                        }else{
+                            println!("get data faild");
                         }
+                    }else{
+                        println!("get iter faild");
                     }
                 }
             }
             let diff_ts = diff_timestamp(start_ts);
             if diff_ts >= 199 {
-                println!("slow {diff_ts} ms")
+                eprintln!("slow {diff_ts} ms")
             }
+            ctx.run_later(Duration::from_millis(200), |act, ctx|{
+                act.every_200_ms(ctx);
+            });
         }
     }
     
@@ -269,7 +280,7 @@ impl WsSession {
                         if let Ok(_) = self.nonce_idx.insert(key2, IVec::from(nonce.to_be_bytes().to_vec())){
                             //println!("insert nonce idx success!");
                         }else{
-                            println!("insert nonce idx faild!");
+                            eprintln!("insert nonce idx faild!");
                         }
                         
                     }else{
