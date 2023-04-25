@@ -1,20 +1,25 @@
-use actix::{Actor, StreamHandler};
+
 use actix::prelude::*;
+use actix::{Actor, StreamHandler};
 use actix_web_actors::ws;
+use chrono::prelude::*;
+use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
+use sled::IVec;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
-use chrono::NaiveDate;
-use chrono::prelude::*;
-use sled::IVec;
+use super::conn_mng::{AppendCmd, RemoveCmd, MsgCmd, ConnectionActor};
 
 #[derive(Debug, PartialEq)]
 struct TransactionError;
 
 fn got_timestamp() -> u128 {
     let now = SystemTime::now();
-    let timestamp = now.duration_since(UNIX_EPOCH).expect("Time went backwards").as_millis();
+    let timestamp = now
+        .duration_since(UNIX_EPOCH)
+        .expect("Time went backwards")
+        .as_millis();
     timestamp
 }
 
@@ -22,12 +27,13 @@ fn diff_timestamp(last: u128) -> u128 {
     got_timestamp() - last
 }
 
-pub fn today_ts() -> i64{
+pub fn today_ts() -> i64 {
     let today = NaiveDate::from_ymd_opt(
         chrono::Local::now().year(),
         chrono::Local::now().month(),
-        chrono::Local::now().day()
-    ).unwrap();
+        chrono::Local::now().day(),
+    )
+    .unwrap();
     let dt = chrono::NaiveDateTime::new(today, chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap());
     let timestamp = dt.timestamp();
     timestamp
@@ -50,16 +56,16 @@ pub fn make_key(topic: &str, nonce: u64) -> IVec {
 
 #[derive(Debug, Clone)]
 pub struct IdGenerator {
-    max_id: Arc<Mutex<u64>>
+    max_id: Arc<Mutex<u64>>,
 }
 
 impl IdGenerator {
     pub fn new(init_id: u64) -> IdGenerator {
-        IdGenerator { 
-            max_id: Arc::new(Mutex::new(init_id))
+        IdGenerator {
+            max_id: Arc::new(Mutex::new(init_id)),
         }
     }
-    
+
     pub fn init_with(&self, init_id: u64) {
         let mut max_id = self.max_id.lock().unwrap();
         *max_id = init_id;
@@ -73,7 +79,6 @@ impl IdGenerator {
     }
 }
 
-
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Message {
     uid: String,
@@ -83,39 +88,43 @@ pub struct Message {
     cmd: Option<String>,
     params: Option<Vec<String>>,
     offset: Option<u64>,
-    nonce: Option<u64>
+    nonce: Option<u64>,
 }
 
 impl Message {
-    fn got_topic(&mut self) -> Option<String>{
-        if let Some(topic) = &self.topic{
+    fn got_topic(&mut self) -> Option<String> {
+        if let Some(topic) = &self.topic {
             Some(topic.clone())
-        }else{
+        } else {
             None
         }
     }
-    fn got_cmd(&mut self) -> Option<String>{
-        if let Some(cmd) = &self.cmd{
+    fn got_cmd(&mut self) -> Option<String> {
+        if let Some(cmd) = &self.cmd {
             Some(cmd.clone())
-        }else{
+        } else {
             None
         }
     }
-    fn got_offset(&mut self) -> Option<u64>{
-        if let Some(offset) = &self.offset{
+    fn got_offset(&mut self) -> Option<u64> {
+        if let Some(offset) = &self.offset {
             Some(*offset)
-        }else{
+        } else {
             None
         }
     }
-    fn got_params(&mut self) -> Option<Vec<String>>{
-        if let Some(params) = &self.params{
+    fn got_params(&mut self) -> Option<Vec<String>> {
+        if let Some(params) = &self.params {
             Some(params.clone())
-        }else{
+        } else {
             None
         }
     }
 }
+
+#[derive(Message)]
+#[rtype(result = "()")]
+pub struct InnerMessage(pub String);
 
 
 #[derive(Serialize, Deserialize)]
@@ -124,18 +133,13 @@ pub struct Command {
     params: Vec<String>,
 }
 
-
 #[derive(Serialize, Deserialize)]
 pub struct ErrResp {
     pub rs: bool,
-    pub detail: String
+    pub detail: String,
 }
 
-#[derive(Message)]
-#[rtype(result = "()")]
-struct InnerMessage(String);
-
-pub struct WsSession{
+pub struct WsSession {
     pub client_id: String,
     pub topics: Option<Vec<String>>,
     pub db: sled::Db,
@@ -144,25 +148,33 @@ pub struct WsSession{
     pub day_idx: sled::Tree,
     pub main_idx: sled::Tree,
     pub nonce_idx: sled::Tree,
-    pub id_generator: IdGenerator
+    pub id_generator: IdGenerator,
+    pub conn: Addr<ConnectionActor>
 }
 
 impl Actor for WsSession {
     type Context = ws::WebsocketContext<Self>;
     fn started(&mut self, ctx: &mut Self::Context) {
         ctx.text("{\"rs\":true,\"detail\":\"connected\"}");
-        ctx.run_later(Duration::from_millis(200), |act, ctx|{
-            act.every_200_ms(ctx);
-        });
-       
     }
 
     fn stopped(&mut self, _ctx: &mut Self::Context) {
+        if let Some(topics) = &self.topics{
+            for topic in topics.iter(){
+                self.conn.do_send(RemoveCmd{topic: topic.to_string(), client_id: self.client_id.clone()});
+            }
+        }
         println!("client:{} disconnected", self.client_id);
     }
-
 }
 
+impl Handler<InnerMessage> for WsSession {
+    type Result = ();
+
+    fn handle(&mut self, msg: InnerMessage, ctx: &mut Self::Context) {
+        ctx.text(msg.0);
+    }
+}
 
 /// Handler for ws::Message message
 impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for WsSession {
@@ -170,58 +182,71 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for WsSession {
         match msg {
             Ok(ws::Message::Ping(msg)) => ctx.pong(&msg),
             Ok(ws::Message::Text(text)) => {
-                match serde_json::from_str::<Message>(&text){
-                    Ok(msg)=>{
+                match serde_json::from_str::<Message>(&text) {
+                    Ok(msg) => {
                         //println!("Got Event to:{:?}", msg.topic);
                         let mut msg = msg;
-                        self.process_message(&mut msg);
+                        self.process_message(&mut msg, ctx);
                     }
-                    Err(err)=>{
+                    Err(err) => {
                         println!("Invalid Message:{} error:{}", text, err);
-                        ctx.text(serde_json::to_string(&ErrResp{rs: false, detail: format!("Invalid json:{err}")}).unwrap())
+                        ctx.text(
+                            serde_json::to_string(&ErrResp {
+                                rs: false,
+                                detail: format!("Invalid json:{err}"),
+                            })
+                            .unwrap(),
+                        )
                     }
                 };
-            },
+            }
             Ok(ws::Message::Binary(bin)) => ctx.binary(bin),
-            Ok(ws::Message::Close(_))=>{ctx.close(Some(ws::CloseReason{code:ws::CloseCode::Normal, description: Some("reset by peer".to_string())}));}
+            Ok(ws::Message::Close(_)) => {
+                ctx.close(Some(ws::CloseReason {
+                    code: ws::CloseCode::Normal,
+                    description: Some("reset by peer".to_string()),
+                }));
+            }
             _ => (),
         }
     }
 }
 
 impl WsSession {
-    fn every_200_ms(&mut self, ctx: &mut <WsSession as Actor>::Context){
+    fn try_fetch_topics(&mut self, ctx: &mut <WsSession as Actor>::Context) {
         // execute every 200ms
-        if let Some(topics) = &self.topics{
+        if let Some(topics) = &self.topics {
             // if subscribe some topics
             let start_ts = got_timestamp();
             let get_offset = self.offset;
             //println!("process:{} start with offset {}", self.client_id, get_offset);
-            for topic in topics{
+            for topic in topics {
+                self.conn.do_send(AppendCmd{topic: topic.to_string(), client_id: self.client_id.clone(), addr: ctx.address()});
+                
                 let fetch_flag_min = make_key(topic.as_str(), get_offset);
                 let fetch_flag_max = make_key(topic.as_str(), u64::MAX);
                 //println!("process topic:{}", topic);
                 for item in self.main_idx.range(fetch_flag_min..fetch_flag_max) {
-                    if let Ok((_k, data_key)) = item{
+                    if let Ok((_k, data_key)) = item {
                         let data_key2 = data_key.clone();
-                        if let Ok(Some(data)) = self.db.get(data_key){
-                            if let Ok(json_text) = String::from_utf8(data.to_vec()){
-                                if let Ok(Some(nonce_ivec)) = self.nonce_idx.get(data_key2){
+                        if let Ok(Some(data)) = self.db.get(data_key) {
+                            if let Ok(json_text) = String::from_utf8(data.to_vec()) {
+                                if let Ok(Some(nonce_ivec)) = self.nonce_idx.get(data_key2) {
                                     let offset = vectu64(nonce_ivec.to_vec());
-                                    if offset > self.offset{
+                                    if offset > self.offset {
                                         self.offset = offset + 1;
                                     }
                                 }
-                                ctx.run_later(Duration::from_millis(5), |_act, ctx|{
+                                ctx.run_later(Duration::from_millis(5), |_act, ctx| {
                                     ctx.text(json_text);
                                 });
-                            }else{
+                            } else {
                                 println!("invalid json");
                             }
-                        }else{
+                        } else {
                             println!("get data faild");
                         }
-                    }else{
+                    } else {
                         println!("get iter faild");
                     }
                 }
@@ -230,25 +255,31 @@ impl WsSession {
             if diff_ts >= 199 {
                 eprintln!("slow {diff_ts} ms")
             }
-            ctx.run_later(Duration::from_millis(100), |act, ctx|{
-                act.every_200_ms(ctx);
-            });
         }
     }
-    
-    fn process_message(&mut self, message: &mut Message) {
+
+    fn process_message(&mut self, message: &mut Message, ctx: &mut <WsSession as Actor>::Context) {
         if let Some(cmd) = message.got_cmd() {
             // this is a command
             let command = cmd.clone();
             let command_str = command.as_str();
-            let params = if let Some(p) = message.got_params() { p } else { vec![] };
-            let offset = if let Some(off) = message.got_offset() { off } else { 0 as u64};
+            let params = if let Some(p) = message.got_params() {
+                p
+            } else {
+                vec![]
+            };
+            let offset = if let Some(off) = message.got_offset() {
+                off
+            } else {
+                0 as u64
+            };
             //self.process_command(command_str, params, offset);
             if command_str == "subscribe" {
                 self.topics = Some(params);
-                if offset > 0{
+                if offset > 0 {
                     self.offset = offset;
                 }
+                self.try_fetch_topics(ctx)
             }
         }
         if let Some(_) = message.got_topic() {
@@ -267,34 +298,38 @@ impl WsSession {
         let today_timestamp_vec = i64to_vec(today_ts());
         // update today's last nonce index
         let new_idx_key = idx_key.clone();
-        if let Ok(_k) = self.day_idx.insert(today_timestamp_vec, idx_key){
+        if let Ok(_k) = self.day_idx.insert(today_timestamp_vec, idx_key) {
             //println!("update today's last nonce success!");
-            if let Ok(_) = self.range_idx.insert(new_idx_key, key.as_bytes()){
+            if let Ok(_) = self.range_idx.insert(new_idx_key, key.as_bytes()) {
                 //println!("update range index success!");
                 let main_key = make_key(message_topic.as_str(), nonce);
                 if let Ok(_) = self.main_idx.insert(main_key, key.as_bytes()) {
                     //println!("update main index success!");
                     let key2 = key.clone();
-                    if let Ok(_) = self.db.insert(key, val.into_bytes()){
+                    let val2 = val.clone();
+                    if let Ok(_) = self.db.insert(key, val.into_bytes()) {
                         //println!("insert data success!");
-                        if let Ok(_) = self.nonce_idx.insert(key2, IVec::from(nonce.to_be_bytes().to_vec())){
+                        if let Ok(_) = self
+                            .nonce_idx
+                            .insert(key2, IVec::from(nonce.to_be_bytes().to_vec()))
+                        {
                             //println!("insert nonce idx success!");
-                        }else{
+                            self.conn.do_send(MsgCmd{topic: message_topic, msg: val2});
+                            
+                        } else {
                             eprintln!("insert nonce idx faild!");
                         }
-                        
-                    }else{
+                    } else {
                         eprintln!("insert data faild!");
                     }
-                }else{
+                } else {
                     eprintln!("update main index faild!");
                 }
-            }else{
+            } else {
                 eprintln!("update range index faild!");
             }
-        }else{
+        } else {
             eprintln!("update today's last nonce faild!");
         };
     }
-    
 }

@@ -1,8 +1,12 @@
 use std::env;
+use std::collections::HashMap;
+use actix::{Actor, Addr};
 use actix_web::{web, get, App, Error, HttpRequest, HttpResponse, HttpServer, Responder};
 use actix_web_actors::ws;
 use serde::Serialize;
-mod websocks;
+mod mq;
+use mq::websocks;
+use mq::conn_mng::ConnectionActor;
 
 #[macro_use] 
 extern crate lazy_static;
@@ -15,7 +19,8 @@ struct AppState {
     range_idx: sled::Tree,
     day_idx: sled::Tree,
     main_idx: sled::Tree,
-    nonce_idx: sled::Tree
+    nonce_idx: sled::Tree,
+    conn: Addr<ConnectionActor>
 }
 
 
@@ -102,7 +107,8 @@ async fn websocket_service(req: HttpRequest, stream: web::Payload, data: web::Da
         day_idx: data.day_idx.clone(),
         main_idx: data.main_idx.clone(),
         nonce_idx: data.nonce_idx.clone(),
-        id_generator: ID_GENERATOR.clone()
+        id_generator: ID_GENERATOR.clone(),
+        conn: data.conn.clone()
     };
     ws::WsResponseBuilder::new(actor, &req, stream)
         .codec(actix_http::ws::Codec::new())
@@ -122,6 +128,8 @@ async fn main() -> std::io::Result<()> {
         8080
     };
 
+    let conn_actor = ConnectionActor { connections: HashMap::new() }.start();
+
     let db = sled::open("data/db.sled").unwrap();
     let r_idx_db = sled::open("data/r_idx.sled").unwrap();
     let r_idx = r_idx_db.open_tree("range").unwrap();
@@ -136,7 +144,7 @@ async fn main() -> std::io::Result<()> {
         println!("last id:{}", last_id);
         ID_GENERATOR.init_with(last_id);
     }
-    let app_state = web::Data::new(AppState { db, range_idx: r_idx, day_idx: d_idx, main_idx: m_idx, nonce_idx});
+    let app_state = web::Data::new(AppState { db, range_idx: r_idx, day_idx: d_idx, main_idx: m_idx, nonce_idx, conn: conn_actor});
     HttpServer::new(move || App::new()
                             .service(websocket_service)
                             .route("/api/status", web::get().to(status_handler))
