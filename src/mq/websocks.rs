@@ -1,5 +1,5 @@
 extern crate rand;
-use rand::Rng;
+use rand::distributions::{Distribution, Uniform};
 use actix::prelude::*;
 use actix::{Actor, StreamHandler};
 use actix_web_actors::ws;
@@ -8,8 +8,7 @@ use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use sled::IVec;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH, Duration};
 use super::conn_mng::{AppendCmd, RemoveCmd, MsgCmd, ClearCmd, ConnectionActor};
 use super::storage::{StorageCmd, StorageActor};
 
@@ -221,46 +220,76 @@ impl WsSession {
         if let Some(topics) = &self.topics {
             // if subscribe some topics
             let start_ts = got_timestamp();
-            let get_offset = self.offset;
             let clear_cmd = ClearCmd {
                 topics: topics.clone(),
                 client_id: self.client_id.clone()
             };
             self.conn.do_send(clear_cmd);
+            let mut rest_count = 1;
+
+            let init_offset = self.offset;
+            rest_count = 0;
             for topic in topics {
-                self.conn.do_send(AppendCmd{topic: topic.to_string(), client_id: self.client_id.clone(), addr: ctx.address()});
-                
-                let fetch_flag_min = make_key(topic.as_str(), get_offset);
+                let fetch_flag_min = make_key(topic.as_str(), init_offset);
                 let fetch_flag_max = make_key(topic.as_str(), u64::MAX);
-                //println!("process topic:{}", topic);
-                for item in self.main_idx.range(fetch_flag_min..fetch_flag_max) {
+                println!("fetch topic:{} from {}", topic, init_offset);
+                let mut data_key2: IVec = IVec::from("");
+                for item in self.main_idx.range(fetch_flag_min..fetch_flag_max){
+                    rest_count+=1;
                     if let Ok((_k, data_key)) = item {
-                        let data_key2 = data_key.clone();
-                        if let Ok(Some(data)) = self.db.get(data_key) {
-                            if let Ok(json_text) = String::from_utf8(data.to_vec()) {
-                                if let Ok(Some(nonce_ivec)) = self.nonce_idx.get(data_key2) {
-                                    let offset = vectu64(nonce_ivec.to_vec());
-                                    if offset > self.offset {
-                                        self.offset = offset + 1;
-                                    }
-                                }
-                                ctx.run_later(Duration::from_millis(1), |_act, ctx| {
+                        data_key2 = data_key.clone();
+                        let k4 = data_key.clone();
+                        match self.db.get(data_key){
+                            Ok(Some(data))=>{
+                                if let Ok(json_text) = String::from_utf8(data.to_vec()) {
                                     ctx.text(json_text);
-                                });
-                            } else {
-                                println!("invalid json");
+                                    //println!("retain message diliverd:{:?}", data_key2.clone());
+                                } else {
+                                    println!("invalid json");
+                                }
+                            },
+                            Ok(None)=>{
+                                println!("get data None with key:{}", String::from_utf8(k4.to_vec()).unwrap());
+                            },
+                            Err(err)=>{
+                                println!("get data with err:{}", err);
                             }
-                        } else {
-                            println!("get data faild");
                         }
                     } else {
                         println!("get iter faild");
                     }
                 }
+                let k3 = data_key2.clone();
+                match self.nonce_idx.get(data_key2){
+                    Ok(Some(nonce_ivec))=>{
+                        let offset = vectu64(nonce_ivec.to_vec());
+                        if offset > self.offset {
+                            self.offset = offset;
+                            println!("processed {} record in topic:{} set offset t0:{}", rest_count, topic, offset);
+                        }
+                    },
+                    Ok(None)=>{
+                        eprintln!("can not get nonce with key:{}", String::from_utf8(k3.to_vec()).unwrap());
+                    }
+                    Err(err)=>{
+                        eprintln!("get nonce error:{}", err);
+                    }
+                }
             }
+
             let diff_ts = diff_timestamp(start_ts);
             if diff_ts >= 199 {
                 eprintln!("slow {diff_ts} ms")
+            }
+            if rest_count < 1{
+                println!("no more retain message regist conn");
+                for topic in topics{
+                    self.conn.do_send(AppendCmd{topic: topic.to_string(), client_id: self.client_id.clone(), addr: ctx.address()});
+                }
+            }else{
+                ctx.run_later(Duration::from_millis(1), |act, ctx|{
+                    act.try_fetch_topics(ctx);
+                });
             }
         }
     }
@@ -310,7 +339,8 @@ impl WsSession {
             data: raw_msg.to_string()
         };
         let mut rng = rand::thread_rng();
-        let st_idx = rng.gen_range(0, 100);
+        let die = Uniform::from(0..100);
+        let st_idx = die.sample(&mut rng);
         let storage_addr_opt = self.storage.get(st_idx);
         if let Some(storage_addr) = storage_addr_opt{
             storage_addr.try_send(cmd).expect("Insert Faild");

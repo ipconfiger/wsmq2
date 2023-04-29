@@ -40,35 +40,35 @@ impl Handler<StorageCmd> for StorageActor {
     fn handle(&mut self, msg: StorageCmd, _ctx: &mut Self::Context) {
         // let val = serde_json::to_string(message).unwrap();
         let key = msg.st_key;
+        let key2 = key.clone();
         let key3 = key.clone();
+        let key4 = key.clone();
         let idx_key = Vec::from(msg.nonce.to_be_bytes());
         let today_timestamp_vec = i64to_vec(today_ts());
         // update today's last nonce index
         let new_idx_key = idx_key.clone();
+        let main_key = make_key(msg.message_topic.as_str(), msg.nonce);
+
         if let Ok(_k) = self.day_idx.insert(today_timestamp_vec, idx_key) {
             //println!("update today's last nonce success!");
             if let Ok(_) = self.range_idx.insert(new_idx_key, key.as_bytes()) {
-                //println!("update range index success!");
-                let main_key = make_key(msg.message_topic.as_str(), msg.nonce);
-                if let Ok(_) = self.main_idx.insert(main_key, key.as_bytes()) {
-                    //println!("update main index success!");
-                    let key2 = key.clone();
-                    //let val2 = val.clone();
-                    if let Ok(_) = self.db.insert(key, msg.data.as_str()) {
-                        //println!("insert data success!");
-                        if let Ok(_) = self
-                            .nonce_idx
-                            .insert(key2, IVec::from(msg.nonce.to_be_bytes().to_vec()))
-                        {
+                if let Ok(_) = self.db.insert(key, msg.data.as_str()) {
+                    //println!("insert data success!");
+                    if let Ok(_) = self
+                        .nonce_idx
+                        .insert(key2, IVec::from(msg.nonce.to_be_bytes().to_vec()))
+                    {
+                        if let Ok(_) = self.main_idx.insert(main_key, key4.as_bytes()) {
 
-                        } else {
-                            eprintln!("insert nonce idx faild!");
+                        }else{
+                            eprintln!("insert main idx faild!");
                         }
+
                     } else {
-                        eprintln!("insert data faild!{:?}", key3);
+                        eprintln!("insert nonce idx faild!");
                     }
                 } else {
-                    eprintln!("update main index faild!");
+                    eprintln!("insert data faild!{:?}", key3);
                 }
             } else {
                 eprintln!("update range index faild!");
