@@ -225,17 +225,16 @@ impl WsSession {
                 client_id: self.client_id.clone()
             };
             self.conn.do_send(clear_cmd);
-            let mut rest_count = 1;
+            let rest_count = 0;
 
             let init_offset = self.offset;
-            rest_count = 0;
             for topic in topics {
                 let fetch_flag_min = make_key(topic.as_str(), init_offset);
                 let fetch_flag_max = make_key(topic.as_str(), u64::MAX);
                 println!("fetch topic:{} from {}", topic, init_offset);
                 let mut data_key2: IVec = IVec::from("");
                 for item in self.main_idx.range(fetch_flag_min..fetch_flag_max){
-                    rest_count+=1;
+                    let rest_count = rest_count + 1;
                     if let Ok((_k, data_key)) = item {
                         data_key2 = data_key.clone();
                         let k4 = data_key.clone();
@@ -287,6 +286,7 @@ impl WsSession {
                     self.conn.do_send(AppendCmd{topic: topic.to_string(), client_id: self.client_id.clone(), addr: ctx.address()});
                 }
             }else{
+                println!("retry {:?} with rest_count {}", topics, rest_count);
                 ctx.run_later(Duration::from_millis(1), |act, ctx|{
                     act.try_fetch_topics(ctx);
                 });
