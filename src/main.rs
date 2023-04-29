@@ -22,7 +22,7 @@ struct AppState {
     main_idx: sled::Tree,
     nonce_idx: sled::Tree,
     conn: Addr<ConnectionActor>,
-    storage: Addr<StorageActor>
+    storage: Vec<Addr<StorageActor>>
 }
 
 
@@ -145,20 +145,22 @@ async fn main() -> std::io::Result<()> {
         println!("last id:{}", last_id);
         ID_GENERATOR.init_with(last_id);
     }
-    let db2 = db.clone();
-    let storage_actor = StorageActor {db: db2,
-        range_idx: r_idx.clone(),
-        day_idx: d_idx.clone(),
-        main_idx: m_idx.clone(),
-        nonce_idx: nonce_idx.clone()
-    }.start();
+    let storage_addrs = [..100].map(|_idx|{
+        StorageActor {db: db.clone(),
+            range_idx: r_idx.clone(),
+            day_idx: d_idx.clone(),
+            main_idx: m_idx.clone(),
+            nonce_idx: nonce_idx.clone()
+        }.start()
+    }).as_slice().to_vec();
+
     let app_state = web::Data::new(AppState { db,
         range_idx: r_idx,
         day_idx: d_idx,
         main_idx: m_idx,
         nonce_idx,
         conn: conn_actor,
-        storage: storage_actor
+        storage: storage_addrs
     });
     HttpServer::new(move || App::new()
                             .service(websocket_service)

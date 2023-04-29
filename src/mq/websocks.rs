@@ -1,4 +1,5 @@
-
+extern crate rand;
+use rand::Rng;
 use actix::prelude::*;
 use actix::{Actor, StreamHandler};
 use actix_web_actors::ws;
@@ -151,7 +152,7 @@ pub struct WsSession {
     pub nonce_idx: sled::Tree,
     pub id_generator: IdGenerator,
     pub conn: Addr<ConnectionActor>,
-    pub storage: Addr<StorageActor>
+    pub storage: Vec<Addr<StorageActor>>
 }
 
 impl Actor for WsSession {
@@ -308,6 +309,11 @@ impl WsSession {
             nonce: nonce,
             data: raw_msg.to_string()
         };
-        self.storage.try_send(cmd).expect("Insert Faild");
+        let mut rng = rand::thread_rng();
+        let st_idx = rng.gen_range(0, 100);
+        let storage_addr_opt = self.storage.get(st_idx);
+        if let Some(storage_addr) = storage_addr_opt{
+            storage_addr.try_send(cmd).expect("Insert Faild");
+        }
     }
 }
