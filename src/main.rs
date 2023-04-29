@@ -7,6 +7,7 @@ use serde::Serialize;
 mod mq;
 use mq::websocks;
 use mq::conn_mng::ConnectionActor;
+use mq::storage::StorageActor;
 
 #[macro_use] 
 extern crate lazy_static;
@@ -20,7 +21,8 @@ struct AppState {
     day_idx: sled::Tree,
     main_idx: sled::Tree,
     nonce_idx: sled::Tree,
-    conn: Addr<ConnectionActor>
+    conn: Addr<ConnectionActor>,
+    storage: Addr<StorageActor>
 }
 
 
@@ -108,7 +110,8 @@ async fn websocket_service(req: HttpRequest, stream: web::Payload, data: web::Da
         main_idx: data.main_idx.clone(),
         nonce_idx: data.nonce_idx.clone(),
         id_generator: ID_GENERATOR.clone(),
-        conn: data.conn.clone()
+        conn: data.conn.clone(),
+        storage: data.storage.clone()
     };
     ws::WsResponseBuilder::new(actor, &req, stream)
         .codec(actix_http::ws::Codec::new())
@@ -127,9 +130,7 @@ async fn main() -> std::io::Result<()> {
     }else{
         8080
     };
-
     let conn_actor = ConnectionActor { connections: HashMap::new() }.start();
-
     let db = sled::open("data/db.sled").unwrap();
     let r_idx_db = sled::open("data/r_idx.sled").unwrap();
     let r_idx = r_idx_db.open_tree("range").unwrap();
@@ -144,7 +145,21 @@ async fn main() -> std::io::Result<()> {
         println!("last id:{}", last_id);
         ID_GENERATOR.init_with(last_id);
     }
-    let app_state = web::Data::new(AppState { db, range_idx: r_idx, day_idx: d_idx, main_idx: m_idx, nonce_idx, conn: conn_actor});
+    let db2 = db.clone();
+    let storage_actor = StorageActor {db: db2,
+        range_idx: r_idx.clone(),
+        day_idx: d_idx.clone(),
+        main_idx: m_idx.clone(),
+        nonce_idx: nonce_idx.clone()
+    }.start();
+    let app_state = web::Data::new(AppState { db,
+        range_idx: r_idx,
+        day_idx: d_idx,
+        main_idx: m_idx,
+        nonce_idx,
+        conn: conn_actor,
+        storage: storage_actor
+    });
     HttpServer::new(move || App::new()
                             .service(websocket_service)
                             .route("/api/status", web::get().to(status_handler))

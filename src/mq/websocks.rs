@@ -9,7 +9,8 @@ use sled::IVec;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
-use super::conn_mng::{AppendCmd, RemoveCmd, MsgCmd, ConnectionActor};
+use super::conn_mng::{AppendCmd, RemoveCmd, MsgCmd, ClearCmd, ConnectionActor};
+use super::storage::{StorageCmd, StorageActor};
 
 #[derive(Debug, PartialEq)]
 struct TransactionError;
@@ -149,7 +150,8 @@ pub struct WsSession {
     pub main_idx: sled::Tree,
     pub nonce_idx: sled::Tree,
     pub id_generator: IdGenerator,
-    pub conn: Addr<ConnectionActor>
+    pub conn: Addr<ConnectionActor>,
+    pub storage: Addr<StorageActor>
 }
 
 impl Actor for WsSession {
@@ -186,7 +188,7 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for WsSession {
                     Ok(msg) => {
                         //println!("Got Event to:{:?}", msg.topic);
                         let mut msg = msg;
-                        self.process_message(&mut msg, ctx);
+                        self.process_message(&mut msg, &text, ctx);
                     }
                     Err(err) => {
                         println!("Invalid Message:{} error:{}", text, err);
@@ -219,7 +221,11 @@ impl WsSession {
             // if subscribe some topics
             let start_ts = got_timestamp();
             let get_offset = self.offset;
-            //println!("process:{} start with offset {}", self.client_id, get_offset);
+            let clear_cmd = ClearCmd {
+                topics: topics.clone(),
+                client_id: self.client_id.clone()
+            };
+            self.conn.do_send(clear_cmd);
             for topic in topics {
                 self.conn.do_send(AppendCmd{topic: topic.to_string(), client_id: self.client_id.clone(), addr: ctx.address()});
                 
@@ -237,7 +243,7 @@ impl WsSession {
                                         self.offset = offset + 1;
                                     }
                                 }
-                                ctx.run_later(Duration::from_millis(5), |_act, ctx| {
+                                ctx.run_later(Duration::from_millis(1), |_act, ctx| {
                                     ctx.text(json_text);
                                 });
                             } else {
@@ -258,7 +264,7 @@ impl WsSession {
         }
     }
 
-    fn process_message(&mut self, message: &mut Message, ctx: &mut <WsSession as Actor>::Context) {
+    fn process_message(&mut self, message: &mut Message, raw_msg:&str, ctx: &mut <WsSession as Actor>::Context) {
         if let Some(cmd) = message.got_cmd() {
             // this is a command
             let command = cmd.clone();
@@ -279,57 +285,29 @@ impl WsSession {
                 if offset > 0 {
                     self.offset = offset;
                 }
-                self.try_fetch_topics(ctx)
+                self.try_fetch_topics(ctx);
+                ctx.text("{\"rs\":true,\"detail\":\"Subscribe Success\"}");
             }
         }
         if let Some(_) = message.got_topic() {
             // if got topic, it's a message, run dispatch!
-            self.dispatch_message(message);
+            self.dispatch_message(message, raw_msg);
         }
     }
 
-    fn dispatch_message(&mut self, message: &mut Message) {
+    fn dispatch_message(&mut self, message: &mut Message, raw_msg: &str) {
         let nonce = self.id_generator.gen_id();
         message.nonce = Some(nonce);
         let message_topic = message.got_topic().unwrap();
+        let topic = message_topic.clone();
         let key = format!("{}-{}", message_topic, message.uid);
-        let val = serde_json::to_string(message).unwrap();
-        let idx_key = Vec::from(nonce.to_be_bytes());
-        let today_timestamp_vec = i64to_vec(today_ts());
-        // update today's last nonce index
-        let new_idx_key = idx_key.clone();
-        if let Ok(_k) = self.day_idx.insert(today_timestamp_vec, idx_key) {
-            //println!("update today's last nonce success!");
-            if let Ok(_) = self.range_idx.insert(new_idx_key, key.as_bytes()) {
-                //println!("update range index success!");
-                let main_key = make_key(message_topic.as_str(), nonce);
-                if let Ok(_) = self.main_idx.insert(main_key, key.as_bytes()) {
-                    //println!("update main index success!");
-                    let key2 = key.clone();
-                    let val2 = val.clone();
-                    if let Ok(_) = self.db.insert(key, val.into_bytes()) {
-                        //println!("insert data success!");
-                        if let Ok(_) = self
-                            .nonce_idx
-                            .insert(key2, IVec::from(nonce.to_be_bytes().to_vec()))
-                        {
-                            //println!("insert nonce idx success!");
-                            self.conn.do_send(MsgCmd{topic: message_topic, msg: val2});
-                            
-                        } else {
-                            eprintln!("insert nonce idx faild!");
-                        }
-                    } else {
-                        eprintln!("insert data faild!");
-                    }
-                } else {
-                    eprintln!("update main index faild!");
-                }
-            } else {
-                eprintln!("update range index faild!");
-            }
-        } else {
-            eprintln!("update today's last nonce faild!");
+        self.conn.do_send(MsgCmd{topic: message_topic, msg: raw_msg.to_string()});
+        let cmd = StorageCmd {
+            st_key: key,
+            message_topic: topic,
+            nonce: nonce,
+            data: raw_msg.to_string()
         };
+        self.storage.try_send(cmd).expect("Insert Faild");
     }
 }

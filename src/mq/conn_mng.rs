@@ -23,6 +23,14 @@ pub struct RemoveCmd {
 
 #[derive(Message)]
 #[rtype(result = "()")]
+pub struct ClearCmd {
+    pub client_id: String,
+    pub topics: Vec<String>
+}
+
+
+#[derive(Message)]
+#[rtype(result = "()")]
 pub struct MsgCmd {
     pub topic: String,
     pub msg: String
@@ -63,6 +71,19 @@ impl Actor for ConnectionActor {
         let mut ctx = actix::Context::new();
         let act = f(&mut ctx);
         ctx.run(act)
+    }
+}
+
+impl Handler<ClearCmd> for ConnectionActor {
+    type Result = ();
+    fn handle(&mut self, msg: ClearCmd, _ctx: &mut Self::Context) {
+        for topic in msg.topics {
+            if self.connections.contains_key(&topic){
+                if let Some(topic_conns) = self.connections.get_mut(&topic){
+                    topic_conns.remove(&msg.client_id).unwrap();
+                }
+            }
+        }
     }
 }
 
