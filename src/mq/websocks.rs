@@ -258,20 +258,22 @@ impl WsSession {
                         println!("get iter faild");
                     }
                 }
-                let k3 = data_key2.clone();
-                match self.nonce_idx.get(data_key2){
-                    Ok(Some(nonce_ivec))=>{
-                        let offset = vectu64(nonce_ivec.to_vec());
-                        if offset > self.offset {
-                            self.offset = offset;
-                            println!("processed {} record in topic:{} set offset t0:{}", rest_count, topic, offset);
+                if rest_count > 0 {
+                    let k3 = data_key2.clone();
+                    match self.nonce_idx.get(data_key2){
+                        Ok(Some(nonce_ivec))=>{
+                            let offset = vectu64(nonce_ivec.to_vec());
+                            if offset > self.offset {
+                                self.offset = offset;
+                                println!("processed {} record in topic:{} set offset t0:{}", rest_count, topic, offset);
+                            }
+                        },
+                        Ok(None)=>{
+                            eprintln!("can not get nonce with key:{:?}", k3);
                         }
-                    },
-                    Ok(None)=>{
-                        eprintln!("can not get nonce with key:{}", String::from_utf8(k3.to_vec()).unwrap());
-                    }
-                    Err(err)=>{
-                        eprintln!("get nonce error:{}", err);
+                        Err(err)=>{
+                            eprintln!("get nonce error:{}", err);
+                        }
                     }
                 }
             }
@@ -339,7 +341,7 @@ impl WsSession {
             data: raw_msg.to_string()
         };
         let mut rng = rand::thread_rng();
-        let die = Uniform::from(0..100);
+        let die = Uniform::from(0..512);
         let st_idx = die.sample(&mut rng);
         let storage_addr_opt = self.storage.get(st_idx);
         if let Some(storage_addr) = storage_addr_opt{

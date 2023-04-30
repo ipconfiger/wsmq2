@@ -145,7 +145,7 @@ async fn main() -> std::io::Result<()> {
         println!("last id:{}", last_id);
         ID_GENERATOR.init_with(last_id);
     }
-    let storage_addrs = [..100].map(|_idx|{
+    let storage_addrs = [..512].map(|_idx|{
         StorageActor {db: db.clone(),
             range_idx: r_idx.clone(),
             day_idx: d_idx.clone(),
