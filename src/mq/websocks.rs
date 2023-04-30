@@ -341,7 +341,7 @@ impl WsSession {
             data: raw_msg.to_string()
         };
         let mut rng = rand::thread_rng();
-        let die = Uniform::from(0..512);
+        let die = Uniform::from(0..256);
         let st_idx = die.sample(&mut rng);
         let storage_addr_opt = self.storage.get(st_idx);
         if let Some(storage_addr) = storage_addr_opt{
