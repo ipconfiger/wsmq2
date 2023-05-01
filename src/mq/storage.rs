@@ -36,29 +36,38 @@ impl Actor for StorageActor {
 }
 
 impl Handler<StorageCmd> for StorageActor {
+    ///
+    ///   day_idx -   today_ts last -> nonce
+    ///   range_idx - nonce as key -> data_key
+    ///   data  -     data_key -> raw_msg
+    ///   nonce -     data_key -> nonce
+    ///   main_idx -  main_key -> data_key
+    ///
     type Result = ();
     fn handle(&mut self, msg: StorageCmd, _ctx: &mut Self::Context) {
         // let val = serde_json::to_string(message).unwrap();
-        let key = msg.st_key;
-        let key2 = key.clone();
-        let key3 = key.clone();
-        let key4 = key.clone();
-        let idx_key = Vec::from(msg.nonce.to_be_bytes());
+        let data_key = msg.st_key;
+        // let log_data_key = data_key.clone();
+        let data_key_in_range_idx = data_key.clone();
+        let data_key_as_nonce_idx_key = data_key.clone();
+        let data_key_as_main_idx_val = data_key.clone();
+        let nonce_as_key = Vec::from(msg.nonce.to_be_bytes());
+        let nonce_in_day_idx = nonce_as_key.clone();
         let today_timestamp_vec = i64to_vec(today_ts());
         // update today's last nonce index
-        let new_idx_key = idx_key.clone();
         let main_key = make_key(msg.message_topic.as_str(), msg.nonce);
 
-        if let Ok(_k) = self.day_idx.insert(today_timestamp_vec, idx_key) {
+        // println!("insert {:?} with nonce {}", log_data_key, msg.nonce);
+        if let Ok(_k) = self.day_idx.insert(today_timestamp_vec, nonce_in_day_idx) {
             //println!("update today's last nonce success!");
-            if let Ok(_) = self.range_idx.insert(new_idx_key, key.as_bytes()) {
-                if let Ok(_) = self.db.insert(key, msg.data.as_str()) {
+            if let Ok(_) = self.range_idx.insert(nonce_as_key, data_key_in_range_idx.as_bytes()) {
+                if let Ok(_) = self.db.insert(data_key, msg.data.as_str()) {
                     //println!("insert data success!");
                     if let Ok(_) = self
                         .nonce_idx
-                        .insert(key2, IVec::from(msg.nonce.to_be_bytes().to_vec()))
+                        .insert(data_key_as_nonce_idx_key, IVec::from(msg.nonce.to_be_bytes().to_vec()))
                     {
-                        if let Ok(_) = self.main_idx.insert(main_key, key4.as_bytes()) {
+                        if let Ok(_) = self.main_idx.insert(main_key, data_key_as_main_idx_val.as_bytes()) {
 
                         }else{
                             eprintln!("insert main idx faild!");
@@ -68,7 +77,7 @@ impl Handler<StorageCmd> for StorageActor {
                         eprintln!("insert nonce idx faild!");
                     }
                 } else {
-                    eprintln!("insert data faild!{:?}", key3);
+                    eprintln!("insert data faild!");
                 }
             } else {
                 eprintln!("update range index faild!");

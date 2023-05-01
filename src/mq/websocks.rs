@@ -8,25 +8,26 @@ use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use sled::IVec;
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH, Duration};
-use super::conn_mng::{AppendCmd, RemoveCmd, MsgCmd, ClearCmd, ConnectionActor};
+// use std::time::{SystemTime, UNIX_EPOCH};
+// use super::conn_mng::{AppendCmd, RemoveCmd, MsgCmd, ClearCmd, ConnectionActor};
 use super::storage::{StorageCmd, StorageActor};
+use super::consumer::{ConsumerActor, RegisterCmd, ClearConnCmd};
 
 #[derive(Debug, PartialEq)]
 struct TransactionError;
 
-fn got_timestamp() -> u128 {
-    let now = SystemTime::now();
-    let timestamp = now
-        .duration_since(UNIX_EPOCH)
-        .expect("Time went backwards")
-        .as_millis();
-    timestamp
-}
-
-fn diff_timestamp(last: u128) -> u128 {
-    got_timestamp() - last
-}
+//fn got_timestamp() -> u128 {
+//    let now = SystemTime::now();
+//    let timestamp = now
+//        .duration_since(UNIX_EPOCH)
+//        .expect("Time went backwards")
+//        .as_millis();
+//    timestamp
+//}
+//
+//fn diff_timestamp(last: u128) -> u128 {
+//    got_timestamp() - last
+//}
 
 pub fn today_ts() -> i64 {
     let today = NaiveDate::from_ymd_opt(
@@ -85,7 +86,7 @@ pub struct Message {
     uid: String,
     topic: Option<String>,
     payload: Option<String>,
-    key: Option<String>,
+    pub key: Option<String>,
     cmd: Option<String>,
     params: Option<Vec<String>>,
     offset: Option<u64>,
@@ -150,20 +151,30 @@ pub struct WsSession {
     pub main_idx: sled::Tree,
     pub nonce_idx: sled::Tree,
     pub id_generator: IdGenerator,
-    pub conn: Addr<ConnectionActor>,
-    pub storage: Vec<Addr<StorageActor>>
+    //pub conn: Addr<ConnectionActor>,
+    pub storage: Vec<Addr<StorageActor>>,
+    pub consumers: Vec<Addr<ConsumerActor>>
 }
 
 impl Actor for WsSession {
     type Context = ws::WebsocketContext<Self>;
     fn started(&mut self, ctx: &mut Self::Context) {
+        ctx.set_mailbox_capacity(65536);
         ctx.text("{\"rs\":true,\"detail\":\"connected\"}");
     }
 
     fn stopped(&mut self, _ctx: &mut Self::Context) {
-        if let Some(topics) = &self.topics{
-            for topic in topics.iter(){
-                self.conn.do_send(RemoveCmd{topic: topic.to_string(), client_id: self.client_id.clone()});
+//        if let Some(topics) = &self.topics{
+//            for topic in topics.iter(){
+//                self.conn.do_send(RemoveCmd{topic: topic.to_string(), client_id: self.client_id.clone()});
+//            }
+//        }
+        for consumer in self.consumers.iter(){
+            match consumer.try_send(ClearConnCmd{client_id: self.client_id.clone()}){
+                Ok(())=>{},
+                Err(err)=>{
+                    eprintln!("Unregist connection {} with err {}", self.client_id, err);
+                }
             }
         }
         println!("client:{} disconnected", self.client_id);
@@ -215,87 +226,6 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for WsSession {
 }
 
 impl WsSession {
-    fn try_fetch_topics(&mut self, ctx: &mut <WsSession as Actor>::Context) {
-        // execute every 200ms
-        if let Some(topics) = &self.topics {
-            // if subscribe some topics
-            let start_ts = got_timestamp();
-            let clear_cmd = ClearCmd {
-                topics: topics.clone(),
-                client_id: self.client_id.clone()
-            };
-            self.conn.do_send(clear_cmd);
-            let rest_count = 0;
-
-            let init_offset = self.offset;
-            for topic in topics {
-                let fetch_flag_min = make_key(topic.as_str(), init_offset);
-                let fetch_flag_max = make_key(topic.as_str(), u64::MAX);
-                println!("fetch topic:{} from {}", topic, init_offset);
-                let mut data_key2: IVec = IVec::from("");
-                for item in self.main_idx.range(fetch_flag_min..fetch_flag_max){
-                    let rest_count = rest_count + 1;
-                    if let Ok((_k, data_key)) = item {
-                        data_key2 = data_key.clone();
-                        let k4 = data_key.clone();
-                        match self.db.get(data_key){
-                            Ok(Some(data))=>{
-                                if let Ok(json_text) = String::from_utf8(data.to_vec()) {
-                                    ctx.text(json_text);
-                                    //println!("retain message diliverd:{:?}", data_key2.clone());
-                                } else {
-                                    println!("invalid json");
-                                }
-                            },
-                            Ok(None)=>{
-                                println!("get data None with key:{}", String::from_utf8(k4.to_vec()).unwrap());
-                            },
-                            Err(err)=>{
-                                println!("get data with err:{}", err);
-                            }
-                        }
-                    } else {
-                        println!("get iter faild");
-                    }
-                }
-                if rest_count > 0 {
-                    let k3 = data_key2.clone();
-                    match self.nonce_idx.get(data_key2){
-                        Ok(Some(nonce_ivec))=>{
-                            let offset = vectu64(nonce_ivec.to_vec());
-                            if offset > self.offset {
-                                self.offset = offset;
-                                println!("processed {} record in topic:{} set offset t0:{}", rest_count, topic, offset);
-                            }
-                        },
-                        Ok(None)=>{
-                            eprintln!("can not get nonce with key:{:?}", k3);
-                        }
-                        Err(err)=>{
-                            eprintln!("get nonce error:{}", err);
-                        }
-                    }
-                }
-            }
-
-            let diff_ts = diff_timestamp(start_ts);
-            if diff_ts >= 199 {
-                eprintln!("slow {diff_ts} ms")
-            }
-            if rest_count < 1{
-                println!("no more retain message regist conn");
-                for topic in topics{
-                    self.conn.do_send(AppendCmd{topic: topic.to_string(), client_id: self.client_id.clone(), addr: ctx.address()});
-                }
-            }else{
-                println!("retry {:?} with rest_count {}", topics, rest_count);
-                ctx.run_later(Duration::from_millis(1), |act, ctx|{
-                    act.try_fetch_topics(ctx);
-                });
-            }
-        }
-    }
-
     fn process_message(&mut self, message: &mut Message, raw_msg:&str, ctx: &mut <WsSession as Actor>::Context) {
         if let Some(cmd) = message.got_cmd() {
             // this is a command
@@ -313,11 +243,27 @@ impl WsSession {
             };
             //self.process_command(command_str, params, offset);
             if command_str == "subscribe" {
-                self.topics = Some(params);
+                println!("process subscribe on {} consumers", self.consumers.len());
+                let topics = Some(params);
+                self.topics = topics.clone();
                 if offset > 0 {
                     self.offset = offset;
                 }
-                self.try_fetch_topics(ctx);
+                // --- 找一个连接数最小的consumer来注册连接
+                let mut rng = rand::thread_rng();
+                let die = Uniform::from(0..self.consumers.len());
+                let st_idx = die.sample(&mut rng);
+                let consumer_addr_opt = self.consumers.get(st_idx);
+                if let Some(consumer_addr) = consumer_addr_opt {
+                    consumer_addr.try_send(RegisterCmd{
+                        client_id: self.client_id.clone(),
+                        offset,
+                        addr: ctx.address(),
+                        topics: topics.unwrap()
+                    }).expect("Regist conn faild");
+                }else{
+                    println!("get consumer faild");
+                }
                 ctx.text("{\"rs\":true,\"detail\":\"Subscribe Success\"}");
             }
         }
@@ -333,7 +279,7 @@ impl WsSession {
         let message_topic = message.got_topic().unwrap();
         let topic = message_topic.clone();
         let key = format!("{}-{}", message_topic, message.uid);
-        self.conn.do_send(MsgCmd{topic: message_topic, msg: raw_msg.to_string()});
+        //self.conn.do_send(MsgCmd{topic: message_topic, msg: raw_msg.to_string()});
         let cmd = StorageCmd {
             st_key: key,
             message_topic: topic,
@@ -341,11 +287,13 @@ impl WsSession {
             data: raw_msg.to_string()
         };
         let mut rng = rand::thread_rng();
-        let die = Uniform::from(0..256);
+        let die = Uniform::from(0..self.storage.len());
         let st_idx = die.sample(&mut rng);
         let storage_addr_opt = self.storage.get(st_idx);
         if let Some(storage_addr) = storage_addr_opt{
+            // println!("will insert msg:{} with none :{} in consumer:{}", key2, nonce, st_idx);
             storage_addr.try_send(cmd).expect("Insert Faild");
         }
+
     }
 }

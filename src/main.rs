@@ -6,7 +6,7 @@ use actix_web_actors::ws;
 use serde::Serialize;
 mod mq;
 use mq::websocks;
-use mq::conn_mng::ConnectionActor;
+use mq::consumer::ConsumerActor;
 use mq::storage::StorageActor;
 
 #[macro_use] 
@@ -21,8 +21,8 @@ struct AppState {
     day_idx: sled::Tree,
     main_idx: sled::Tree,
     nonce_idx: sled::Tree,
-    conn: Addr<ConnectionActor>,
-    storage: Vec<Addr<StorageActor>>
+    storage: Vec<Addr<StorageActor>>,
+    consumers: Vec<Addr<ConsumerActor>>
 }
 
 
@@ -110,8 +110,8 @@ async fn websocket_service(req: HttpRequest, stream: web::Payload, data: web::Da
         main_idx: data.main_idx.clone(),
         nonce_idx: data.nonce_idx.clone(),
         id_generator: ID_GENERATOR.clone(),
-        conn: data.conn.clone(),
-        storage: data.storage.clone()
+        storage: data.storage.clone(),
+        consumers: data.consumers.clone()
     };
     ws::WsResponseBuilder::new(actor, &req, stream)
         .codec(actix_http::ws::Codec::new())
@@ -130,7 +130,7 @@ async fn main() -> std::io::Result<()> {
     }else{
         8080
     };
-    let conn_actor = ConnectionActor { connections: HashMap::new() }.start();
+
     let db = sled::open("data/db.sled").unwrap();
     let r_idx_db = sled::open("data/r_idx.sled").unwrap();
     let r_idx = r_idx_db.open_tree("range").unwrap();
@@ -145,22 +145,40 @@ async fn main() -> std::io::Result<()> {
         println!("last id:{}", last_id);
         ID_GENERATOR.init_with(last_id);
     }
-    let storage_addrs = [..256].map(|_idx|{
-        StorageActor {db: db.clone(),
+    let mut storage_addrs: Vec<Addr<StorageActor>> = Vec::new();
+    for _idx in 0..1 {
+        let addr = StorageActor {db: db.clone(),
             range_idx: r_idx.clone(),
             day_idx: d_idx.clone(),
             main_idx: m_idx.clone(),
             nonce_idx: nonce_idx.clone()
-        }.start()
-    }).as_slice().to_vec();
+        }.start();
+        storage_addrs.insert(0, addr);
+    }
+
+    let mut consumer_addrs: Vec<Addr<ConsumerActor>> = Vec::new();
+    for _idx in 0..1 {
+        let addr = ConsumerActor {
+            connection_offset: HashMap::new(),
+            connection_addr: HashMap::new(),
+            connection_count: 0,
+            connection_topics: HashMap::new(),
+            db: db.clone(),
+            range_idx: r_idx.clone(),
+            day_idx: d_idx.clone(),
+            main_idx: m_idx.clone(),
+            nonce_idx: nonce_idx.clone(),
+        }.start();
+        consumer_addrs.insert(0, addr);
+    }
 
     let app_state = web::Data::new(AppState { db,
         range_idx: r_idx,
         day_idx: d_idx,
         main_idx: m_idx,
         nonce_idx,
-        conn: conn_actor,
-        storage: storage_addrs
+        storage: storage_addrs,
+        consumers: consumer_addrs
     });
     HttpServer::new(move || App::new()
                             .service(websocket_service)

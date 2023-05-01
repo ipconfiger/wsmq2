@@ -4,6 +4,9 @@
             "type": "cargo",
             "name": "Run Server",
             "cargoArgs": ["run"],
+            "environment": {
+                "RUST_BACKTRACE": "1"
+            },
         },
         
     ]
