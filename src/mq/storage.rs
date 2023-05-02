@@ -1,6 +1,7 @@
 use actix::{ Actor, Context, Handler};
 use actix::prelude::*;
 use sled::IVec;
+use std::time::Duration;
 use super::websocks::{i64to_vec, today_ts, make_key};
 
 #[derive(Message)]
@@ -44,7 +45,7 @@ impl Handler<StorageCmd> for StorageActor {
     ///   main_idx -  main_key -> data_key
     ///
     type Result = ();
-    fn handle(&mut self, msg: StorageCmd, _ctx: &mut Self::Context) {
+    fn handle(&mut self, msg: StorageCmd, ctx: &mut Self::Context) {
         // let val = serde_json::to_string(message).unwrap();
         let data_key = msg.st_key;
         // let log_data_key = data_key.clone();
@@ -68,7 +69,7 @@ impl Handler<StorageCmd> for StorageActor {
                         .insert(data_key_as_nonce_idx_key, IVec::from(msg.nonce.to_be_bytes().to_vec()))
                     {
                         if let Ok(_) = self.main_idx.insert(main_key, data_key_as_main_idx_val.as_bytes()) {
-
+                            ctx.wait(actix::clock::sleep(Duration::from_millis(1)).into_actor(self));
                         }else{
                             eprintln!("insert main idx faild!");
                         }

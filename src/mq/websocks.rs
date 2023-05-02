@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 // use super::conn_mng::{AppendCmd, RemoveCmd, MsgCmd, ClearCmd, ConnectionActor};
 use super::storage::{StorageCmd, StorageActor};
 use super::consumer::{ConsumerActor, RegisterCmd, ClearConnCmd};
+use super::partition::PartitionDispacher;
 
 #[derive(Debug, PartialEq)]
 struct TransactionError;
@@ -83,44 +84,47 @@ impl IdGenerator {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Message {
-    uid: String,
-    topic: Option<String>,
-    payload: Option<String>,
+    pub uid: String,
+    pub topic: Option<String>,
+    pub payload: Option<String>,
     pub key: Option<String>,
-    cmd: Option<String>,
-    params: Option<Vec<String>>,
-    offset: Option<u64>,
-    nonce: Option<u64>,
+    pub cmd: Option<String>,
+    pub params: Option<Vec<String>>,
+    pub offset: Option<u64>,
+    pub nonce: Option<u64>,
 }
 
 impl Message {
-    fn got_topic(&mut self) -> Option<String> {
+    pub fn got_topic(&mut self) -> Option<String> {
         if let Some(topic) = &self.topic {
             Some(topic.clone())
         } else {
             None
         }
     }
-    fn got_cmd(&mut self) -> Option<String> {
+    pub fn got_cmd(&mut self) -> Option<String> {
         if let Some(cmd) = &self.cmd {
             Some(cmd.clone())
         } else {
             None
         }
     }
-    fn got_offset(&mut self) -> Option<u64> {
+    pub fn got_offset(&mut self) -> Option<u64> {
         if let Some(offset) = &self.offset {
             Some(*offset)
         } else {
             None
         }
     }
-    fn got_params(&mut self) -> Option<Vec<String>> {
+    pub fn got_params(&mut self) -> Option<Vec<String>> {
         if let Some(params) = &self.params {
             Some(params.clone())
         } else {
             None
         }
+    }
+    pub fn set_nonce(&mut self, nonce: u64) {
+        self.nonce = Some(nonce);
     }
 }
 
@@ -143,17 +147,7 @@ pub struct ErrResp {
 
 pub struct WsSession {
     pub client_id: String,
-    pub topics: Option<Vec<String>>,
-    pub db: sled::Db,
-    pub offset: u64,
-    pub range_idx: sled::Tree,
-    pub day_idx: sled::Tree,
-    pub main_idx: sled::Tree,
-    pub nonce_idx: sled::Tree,
-    pub id_generator: IdGenerator,
-    //pub conn: Addr<ConnectionActor>,
-    pub storage: Vec<Addr<StorageActor>>,
-    pub consumers: Vec<Addr<ConsumerActor>>
+    pub dispacher: PartitionDispacher
 }
 
 impl Actor for WsSession {
@@ -164,19 +158,7 @@ impl Actor for WsSession {
     }
 
     fn stopped(&mut self, _ctx: &mut Self::Context) {
-//        if let Some(topics) = &self.topics{
-//            for topic in topics.iter(){
-//                self.conn.do_send(RemoveCmd{topic: topic.to_string(), client_id: self.client_id.clone()});
-//            }
-//        }
-        for consumer in self.consumers.iter(){
-            match consumer.try_send(ClearConnCmd{client_id: self.client_id.clone()}){
-                Ok(())=>{},
-                Err(err)=>{
-                    eprintln!("Unregist connection {} with err {}", self.client_id, err);
-                }
-            }
-        }
+        self.dispacher.unsubscribe(self.client_id.as_str());
         println!("client:{} disconnected", self.client_id);
     }
 }
@@ -243,57 +225,18 @@ impl WsSession {
             };
             //self.process_command(command_str, params, offset);
             if command_str == "subscribe" {
-                println!("process subscribe on {} consumers", self.consumers.len());
-                let topics = Some(params);
-                self.topics = topics.clone();
-                if offset > 0 {
-                    self.offset = offset;
-                }
-                // --- 找一个连接数最小的consumer来注册连接
-                let mut rng = rand::thread_rng();
-                let die = Uniform::from(0..self.consumers.len());
-                let st_idx = die.sample(&mut rng);
-                let consumer_addr_opt = self.consumers.get(st_idx);
-                if let Some(consumer_addr) = consumer_addr_opt {
-                    consumer_addr.try_send(RegisterCmd{
-                        client_id: self.client_id.clone(),
-                        offset,
-                        addr: ctx.address(),
-                        topics: topics.unwrap()
-                    }).expect("Regist conn faild");
-                }else{
-                    println!("get consumer faild");
-                }
+                let topics = params;
+                self.dispacher.subscribe(ctx.address(), self.client_id.as_str(), topics, offset);
                 ctx.text("{\"rs\":true,\"detail\":\"Subscribe Success\"}");
             }
         }
         if let Some(_) = message.got_topic() {
             // if got topic, it's a message, run dispatch!
-            self.dispatch_message(message, raw_msg);
+            self.dispatch_message(message);
         }
     }
 
-    fn dispatch_message(&mut self, message: &mut Message, raw_msg: &str) {
-        let nonce = self.id_generator.gen_id();
-        message.nonce = Some(nonce);
-        let message_topic = message.got_topic().unwrap();
-        let topic = message_topic.clone();
-        let key = format!("{}-{}", message_topic, message.uid);
-        //self.conn.do_send(MsgCmd{topic: message_topic, msg: raw_msg.to_string()});
-        let cmd = StorageCmd {
-            st_key: key,
-            message_topic: topic,
-            nonce: nonce,
-            data: raw_msg.to_string()
-        };
-        let mut rng = rand::thread_rng();
-        let die = Uniform::from(0..self.storage.len());
-        let st_idx = die.sample(&mut rng);
-        let storage_addr_opt = self.storage.get(st_idx);
-        if let Some(storage_addr) = storage_addr_opt{
-            // println!("will insert msg:{} with none :{} in consumer:{}", key2, nonce, st_idx);
-            storage_addr.try_send(cmd).expect("Insert Faild");
-        }
-
+    fn dispatch_message(&mut self, message: &mut Message) {
+        self.dispacher.dispach_message(message);
     }
 }

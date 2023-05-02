@@ -54,7 +54,10 @@ impl Handler<RegisterCmd> for ConsumerActor {
             self.connection_addr.insert(client_id.to_string(), msg.addr);
         }
         if self.connection_topics.contains_key(client_id){
-            *self.connection_topics.get_mut(client_id).unwrap() = msg.topics;
+            let mut tps =  self.connection_topics.get_mut(client_id).unwrap();
+            for topic in msg.topics {
+               tps.insert(0, topic);
+            }
         }else{
             self.connection_topics.insert(client_id.to_string(), msg.topics);
         }
@@ -65,16 +68,23 @@ impl Handler<RegisterCmd> for ConsumerActor {
 impl Handler<ClearConnCmd> for ConsumerActor {
     type Result = ();
     fn handle(&mut self, msg: ClearConnCmd, _ctx: &mut Self::Context) {
+        let mut ct = 0;
         if self.connection_addr.contains_key(msg.client_id.as_str()){
             self.connection_addr.remove(msg.client_id.as_str());
+            ct+=1;
         }
         if self.connection_offset.contains_key(msg.client_id.as_str()){
             self.connection_offset.remove(msg.client_id.as_str());
+            ct+=1;
         }
         if self.connection_topics.contains_key(msg.client_id.as_str()){
             self.connection_topics.remove(msg.client_id.as_str());
+            ct+=1;
         }
         //self.connection_count = self.connection_count - 1;
+        if ct > 2{
+            println!("Client:{} Unsubscribe Successful", msg.client_id);
+        }
     }
 }
 
@@ -84,6 +94,7 @@ impl Actor for ConsumerActor {
 
     fn started(&mut self, ctx: &mut Self::Context) {
         // println!("consumer started");
+        ctx.set_mailbox_capacity(65536);
         ctx.run_later(Duration::from_millis(10), |act, ctx|{
             act.process_message(ctx);
         });
@@ -118,7 +129,7 @@ impl ConsumerActor {
     fn process_message(&mut self, ctx: &mut <ConsumerActor as Actor>::Context) {
         let mut all_count = 0;
         if self.connection_topics.len() < 1 {
-            ctx.run_later(Duration::from_millis(1000), |act, ctx|{
+            ctx.run_later(Duration::from_millis(500), |act, ctx|{
                 act.process_message(ctx); 
             });
             return;
@@ -201,11 +212,11 @@ impl ConsumerActor {
         }
         
         if all_count > 0{
-            ctx.run_later(Duration::from_millis(200), |act, ctx|{
+            ctx.run_later(Duration::from_millis(100), |act, ctx|{
                 act.process_message(ctx); 
             });
         }else{
-            ctx.run_later(Duration::from_millis(800), |act, ctx|{
+            ctx.run_later(Duration::from_millis(200), |act, ctx|{
                 act.process_message(ctx); 
             });
         }
