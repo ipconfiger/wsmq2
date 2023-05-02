@@ -1,5 +1,4 @@
 extern crate rand;
-use rand::distributions::{Distribution, Uniform};
 use actix::prelude::*;
 use actix::{Actor, StreamHandler};
 use actix_web_actors::ws;
@@ -10,8 +9,6 @@ use sled::IVec;
 use std::sync::{Arc, Mutex};
 // use std::time::{SystemTime, UNIX_EPOCH};
 // use super::conn_mng::{AppendCmd, RemoveCmd, MsgCmd, ClearCmd, ConnectionActor};
-use super::storage::{StorageCmd, StorageActor};
-use super::consumer::{ConsumerActor, RegisterCmd, ClearConnCmd};
 use super::partition::PartitionDispacher;
 
 #[derive(Debug, PartialEq)]
@@ -181,7 +178,7 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for WsSession {
                     Ok(msg) => {
                         //println!("Got Event to:{:?}", msg.topic);
                         let mut msg = msg;
-                        self.process_message(&mut msg, &text, ctx);
+                        self.process_message(&mut msg, ctx);
                     }
                     Err(err) => {
                         println!("Invalid Message:{} error:{}", text, err);
@@ -208,7 +205,7 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for WsSession {
 }
 
 impl WsSession {
-    fn process_message(&mut self, message: &mut Message, raw_msg:&str, ctx: &mut <WsSession as Actor>::Context) {
+    fn process_message(&mut self, message: &mut Message, ctx: &mut <WsSession as Actor>::Context) {
         if let Some(cmd) = message.got_cmd() {
             // this is a command
             let command = cmd.clone();

@@ -41,13 +41,34 @@ async fn websocket_service(req: HttpRequest, stream: web::Payload, data: web::Da
 async fn main() -> std::io::Result<()> {
     let args: Vec<String> = env::args().collect();
     println!("args:{args:?}");
-    let port = if args.len() > 1usize {
-        args[1].parse::<u16>().unwrap()
-    }else{
-        8080
-    };
 
-    let dispatcher = PartitionDispacher::from_number(10);
+    let matches = clap::App::new("Websocket Messsage Queue")
+    .version("0.1")
+    .author("Alexander.Li")
+    .about("Light and Fast Message Queue Run Under Websocket")
+    .arg(clap::Arg::with_name("port")
+        .short('p')
+        .long("port")
+        .value_name("Listen Port")
+        .help("The port mq listen on")
+        .default_value("8080")
+        .takes_value(true))
+    .arg(clap::Arg::with_name("Segment")
+        .short('s')
+        .long("segment")
+        .value_name("segment")
+        .help("Segment count for storage")
+        .default_value("10")
+        .takes_value(true))
+    .get_matches();
+    let port_str = matches.value_of("port").unwrap();
+    let segment_str = matches.value_of("Segment").unwrap();
+
+
+    let port:u16 = port_str.parse().unwrap();
+    let segment:u16 = segment_str.parse().unwrap();
+
+    let dispatcher = PartitionDispacher::from_number(segment);
 
     let app_state = web::Data::new(AppState {
         dispacher:dispatcher

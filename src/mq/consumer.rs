@@ -1,10 +1,9 @@
 use actix::{Actor, Addr, Context, Handler};
 use std::collections::HashMap;
 use sled::IVec;
-use super::websocks::{WsSession, InnerMessage, make_key, vectu64, Message};
+use super::websocks::{WsSession, InnerMessage, make_key, vectu64};
 use actix::prelude::*;
 use std::time::Duration;
-use serde_json::from_str;
 
     
 #[derive(Message)]
@@ -54,7 +53,7 @@ impl Handler<RegisterCmd> for ConsumerActor {
             self.connection_addr.insert(client_id.to_string(), msg.addr);
         }
         if self.connection_topics.contains_key(client_id){
-            let mut tps =  self.connection_topics.get_mut(client_id).unwrap();
+            let tps =  self.connection_topics.get_mut(client_id).unwrap();
             for topic in msg.topics {
                tps.insert(0, topic);
             }
