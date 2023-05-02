@@ -69,7 +69,7 @@ impl Handler<StorageCmd> for StorageActor {
                         .insert(data_key_as_nonce_idx_key, IVec::from(msg.nonce.to_be_bytes().to_vec()))
                     {
                         if let Ok(_) = self.main_idx.insert(main_key, data_key_as_main_idx_val.as_bytes()) {
-                            ctx.wait(actix::clock::sleep(Duration::from_millis(1)).into_actor(self));
+                            ctx.wait(actix::clock::sleep(Duration::from_millis(2)).into_actor(self));
                         }else{
                             eprintln!("insert main idx faild!");
                         }
