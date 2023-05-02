@@ -77,6 +77,15 @@ impl IdGenerator {
         let new_id = *max_id;
         new_id
     }
+
+    pub fn get_max_id(&self) -> u64 {
+        if let Ok(mid) = self.max_id.lock() {
+            *mid
+        }else{
+            0
+        }
+    }
+
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

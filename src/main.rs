@@ -1,7 +1,6 @@
 use std::env;
 use actix_web::{web, get, App, Error, HttpRequest, HttpResponse, HttpServer, Responder};
 use actix_web_actors::ws;
-use serde::Serialize;
 mod mq;
 use mq::websocks;
 use mq::partition::PartitionDispacher;
@@ -9,15 +8,6 @@ use mq::partition::PartitionDispacher;
 struct AppState {
     dispacher: PartitionDispacher
 }
-
-
-#[derive(Serialize)] 
-struct Status {
-    retain_messages: usize,
-    disk_size: u64,
-    last_nonce: u64
-}
-
 
 const MAX_FRAME_SIZE: usize = 128_384; // 16KiB
 
@@ -34,6 +24,29 @@ async fn websocket_service(req: HttpRequest, stream: web::Payload, data: web::Da
         .frame_size(MAX_FRAME_SIZE)
         .protocols(&["A", "B"])
         .start()
+}
+
+async fn trim_handler(req: HttpRequest, data: web::Data<AppState>) -> impl Responder{
+    let offset: &str = req.match_info().get("offset").unwrap();
+    let days: u16 = offset.parse::<u16>().unwrap();
+    data.dispacher.clone().trim_data(days);
+    let resp: websocks::ErrResp = websocks::ErrResp{rs:true, detail:"".to_string()};
+    let json = serde_json::to_string(&resp).unwrap();
+    HttpResponse::Ok().body(json)
+}
+
+async fn status_handler(_req: HttpRequest, data: web::Data<AppState>) -> impl Responder{
+    let status = data.dispacher.clone().sum_status();
+    let json = serde_json::to_string(&status).unwrap();
+    HttpResponse::Ok().body(json)
+}
+
+async fn publish_handler(_req: HttpRequest, data: web::Data<AppState>, msg: web::Json<websocks::Message>) -> impl Responder {
+    let mut message = msg;
+    data.dispacher.clone().dispach_message(&mut message);
+    let resp: websocks::ErrResp = websocks::ErrResp{rs:true, detail:"".to_string()};
+    let json = serde_json::to_string(&resp).unwrap();
+    HttpResponse::Ok().body(json)
 }
 
 
@@ -75,8 +88,9 @@ async fn main() -> std::io::Result<()> {
     });
     HttpServer::new(move || App::new()
                             .service(websocket_service)
-                            //.route("/api/status", web::get().to(status_handler))
-                            //.route("/api/trim/{offset}/days", web::get().to(trim_handler))
+                            .route("/api/publish", web::post().to(publish_handler))
+                            .route("/api/status", web::get().to(status_handler))
+                            .route("/api/trim/{offset}/days", web::get().to(trim_handler))
                             .app_data(app_state.clone()))
         .bind(("0.0.0.0", port))?
         .run()
